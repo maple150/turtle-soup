@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>恐怖海龟汤</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="game-container">
+        <header>
+            <h1>🕵️‍♂️ 恐怖海龟汤</h1>
+            <p>推理背后的真相</p>
+        </header>
+
+        <main>
+            <section class="question-card">
+                <h2>汤面：</h2>
+                <p id="question-text">点击“新游戏”开始...</p>
+            </section>
+
+            <section class="chat-container" id="chat-box">
+                <!-- 消息将通过JS插入到这里 -->
+            </section>
+
+            <section class="input-area">
+                <input 
+                    type="text" 
+                    id="guess-input" 
+                    placeholder="输入你的猜测（例如：他是自杀的吗？）..." 
+                    autocomplete="off"
+                />
+                <button id="send-btn" class="btn-primary" disabled>发送</button>
+            </section>
+        </main>
+
+        <footer>
+            <button id="new-game-btn" class="btn-success">🎲 新游戏</button>
+            <p>提示：输入“结束游戏”可直接查看答案</p>
+        </footer>
+    </div>
+
+    <!-- 导入数据和逻辑 -->
+    <script type="module">
+        import { getRandomPuzzle } from './js/puzzles.js';
+        import { TurtleSoupGame } from './js/main.js';
+
+        // 初始化游戏
+        const game = new TurtleSoupGame(getRandomPuzzle);
+        window.game = game; // 挂载到全局以便HTML调用
+    </script>
+</body>
+</html>
