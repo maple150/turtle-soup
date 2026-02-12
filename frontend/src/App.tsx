@@ -31,6 +31,7 @@ const App: React.FC = () => {
   const [loadingDetail, setLoadingDetail] = useState(false);
 
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [progress, setProgress] = useState<number | null>(null);
 
   const [chat, setChat] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
@@ -135,6 +136,15 @@ const App: React.FC = () => {
       const { answer, history } = await askInSession(sessionId, question);
       // 以服务端为准，避免多人时本地状态不一致
       setChat(history.length ? history : [...nextChat, { role: "assistant", content: answer }]);
+
+      // 如果是进度查询，则解析百分比并更新进度条
+      if (question === "进度") {
+        const match = answer.match(/进度：(\d+)%/);
+        if (match) {
+          const value = Math.max(0, Math.min(100, parseInt(match[1], 10)));
+          setProgress(value);
+        }
+      }
     } catch (e: any) {
       setError(e?.message ?? "主持人暂时失联了，请稍后再试。");
     } finally {
@@ -307,6 +317,20 @@ const App: React.FC = () => {
                 用「是 / 否 / 无关 / 无法确定」问答的方式，一步步逼近真相
               </div>
             </div>
+            {progress !== null && (
+              <div className="panel-meta">
+                <div className="progress-pill">
+                  <span className="progress-label">推理进度</span>
+                  <div className="progress-track">
+                    <div
+                      className="progress-fill"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                  <span className="progress-value">{progress}%</span>
+                </div>
+              </div>
+            )}
           </div>
           <div className="panel-body chat-container">
             <div className="chat-log">

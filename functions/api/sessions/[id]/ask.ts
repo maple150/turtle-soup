@@ -71,6 +71,8 @@ export const onRequest = async (context: any): Promise<Response> => {
     });
   }
 
+  const isProgress = question === "进度";
+
   // 将当前房间的历史对话转换为 LLM 需要的格式
   const historyMessages: ChatCompletionMessageParam[] = session.history.map(
     (turn: ChatTurn) => ({
@@ -79,7 +81,7 @@ export const onRequest = async (context: any): Promise<Response> => {
     })
   );
 
-  const messages: ChatCompletionMessageParam[] = [
+  const baseMessages: ChatCompletionMessageParam[] = [
     {
       role: "system",
       content: HOST_SYSTEM_PROMPT
@@ -96,12 +98,22 @@ export const onRequest = async (context: any): Promise<Response> => {
         "下面是到目前为止的对话历史（如果有）："
       ].join("\n")
     },
-    ...historyMessages,
-    {
-      role: "user",
-      content: `玩家的新提问或请求是：${question}`
-    }
+    ...historyMessages
   ];
+
+  const finalUserMessage: ChatCompletionMessageParam = isProgress
+    ? {
+        role: "user",
+        content:
+          "玩家现在发送了“进度”两个字，他们想知道目前距离完整真相的大致接近百分比。" +
+          "请根据以上对话内容评估一个 0-100 之间的整数百分比，并且只输出一行，格式严格为“进度：X%”，不要输出任何其他文字、标点或解释。"
+      }
+    : {
+        role: "user",
+        content: `玩家的新提问或请求是：“${question}”。请严格按照系统提示，只返回一行符合规则的答案。`
+      };
+
+  const messages: ChatCompletionMessageParam[] = [...baseMessages, finalUserMessage];
 
   try {
     const answer = await callQianwenChat(messages, { temperature: 0.6 });
