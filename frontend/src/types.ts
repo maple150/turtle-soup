@@ -17,3 +17,10 @@ export interface ChatTurn {
   content: string;
 }
 
+export interface SessionInfo {
+  sessionId: string;
+  soup: TurtleSoupDetail;
+  history: ChatTurn[];
+}
+
+

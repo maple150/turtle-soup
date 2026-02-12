@@ -1,4 +1,9 @@
-import type { ChatTurn, TurtleSoupDetail, TurtleSoupSummary } from "../types";
+import type {
+  ChatTurn,
+  TurtleSoupDetail,
+  TurtleSoupSummary,
+  SessionInfo
+} from "../types";
 
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL && (import.meta as any).env.VITE_API_BASE_URL !== ""
@@ -36,15 +41,27 @@ export async function fetchSoupDetail(id: string): Promise<TurtleSoupDetail> {
   return request<TurtleSoupDetail>(`/turtle-soups/${id}`);
 }
 
-export async function askHost(
-  id: string,
-  question: string,
-  history: ChatTurn[]
-): Promise<string> {
-  const data = await request<{ answer: string }>(`/turtle-soups/${id}/ask`, {
+export async function createSession(soupId: string): Promise<SessionInfo> {
+  return request<SessionInfo>("/sessions", {
     method: "POST",
-    body: JSON.stringify({ question, history })
+    body: JSON.stringify({ soupId })
   });
-  return data.answer;
+}
+
+export async function fetchSession(sessionId: string): Promise<SessionInfo> {
+  return request<SessionInfo>(`/sessions/${sessionId}`);
+}
+
+export async function askInSession(
+  sessionId: string,
+  question: string
+): Promise<{ answer: string; history: ChatTurn[] }> {
+  return request<{ answer: string; history: ChatTurn[] }>(
+    `/sessions/${sessionId}/ask`,
+    {
+      method: "POST",
+      body: JSON.stringify({ question })
+    }
+  );
 }
 

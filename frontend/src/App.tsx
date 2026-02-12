@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { ChatTurn, TurtleSoupDetail, TurtleSoupSummary } from "./types";
-import { askHost, fetchSoupDetail, fetchSoups } from "./api/client";
+import {
+  askInSession,
+  createSession,
+  fetchSession,
+  fetchSoupDetail,
+  fetchSoups
+} from "./api/client";
 
 type Status = "idle" | "loading" | "error" | "ok";
 
@@ -24,6 +30,8 @@ const App: React.FC = () => {
   const [detail, setDetail] = useState<TurtleSoupDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
+  const [sessionId, setSessionId] = useState<string | null>(null);
+
   const [chat, setChat] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
   const [asking, setAsking] = useState(false);
@@ -36,7 +44,6 @@ const App: React.FC = () => {
       try {
         const list = await fetchSoups();
         setSoups(list);
-        setApiStatus("ok");
       } catch (e: any) {
         setApiStatus("error");
         setError(e?.message ?? "加载题库失败");
@@ -44,12 +51,48 @@ const App: React.FC = () => {
     })();
   }, []);
 
+  // 如果 URL 中带有 ?session=xxx，则尝试加入现有房间
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const sid = url.searchParams.get("session");
+    if (sid) {
+      setSessionId(sid);
+    }
+  }, []);
+
+  // 加载已有 session（用于第二个玩家通过链接加入）
+  useEffect(() => {
+    if (!sessionId) return;
+    setLoadingDetail(true);
+    setError(null);
+    (async () => {
+      try {
+        const info = await fetchSession(sessionId);
+        setSelectedId(info.soup.id);
+        setDetail(info.soup);
+        setChat(info.history);
+        setApiStatus("ok");
+      } catch (e: any) {
+        setError(e?.message ?? "房间不存在或已过期，请确认链接是否正确。");
+        setApiStatus("error");
+      } finally {
+        setLoadingDetail(false);
+      }
+    })();
+  }, [sessionId]);
+
+  // 当选择题目但尚未创建房间时，本地加载题目详情用于展示
   useEffect(() => {
     if (!selectedId) {
-      setDetail(null);
-      setChat([]);
+      if (!sessionId) {
+        setDetail(null);
+        setChat([]);
+      }
       return;
     }
+    if (sessionId) return; // 已有房间时，详情和聊天由 session 控制
+
     setLoadingDetail(true);
     setError(null);
     (async () => {
@@ -60,7 +103,7 @@ const App: React.FC = () => {
           {
             role: "assistant",
             content:
-              "欢迎来到海龟汤推理室，我是主持人「汤神小千」。请根据开局描述自由发问，我会用「是 / 否 / 无关 / 无法确定」来回答你，并适时给一点小提示。"
+              "欢迎来到海龟汤推理室，我是主持人「汤神小千」。请选择或创建房间后再开始发问。"
           }
         ]);
       } catch (e: any) {
@@ -69,15 +112,15 @@ const App: React.FC = () => {
         setLoadingDetail(false);
       }
     })();
-  }, [selectedId]);
+  }, [selectedId, sessionId]);
 
   const canAsk = useMemo(
-    () => !!selectedId && input.trim().length > 0 && !asking,
-    [selectedId, input, asking]
+    () => !!sessionId && input.trim().length > 0 && !asking,
+    [sessionId, input, asking]
   );
 
   async function handleAsk(customQuestion?: string) {
-    if (!selectedId || asking) return;
+    if (!sessionId || asking) return;
     const question = (customQuestion ?? input).trim();
     if (!question) return;
 
@@ -89,8 +132,9 @@ const App: React.FC = () => {
     setInput("");
 
     try {
-      const answer = await askHost(selectedId, question, nextChat);
-      setChat([...nextChat, { role: "assistant", content: answer }]);
+      const { answer, history } = await askInSession(sessionId, question);
+      // 以服务端为准，避免多人时本地状态不一致
+      setChat(history.length ? history : [...nextChat, { role: "assistant", content: answer }]);
     } catch (e: any) {
       setError(e?.message ?? "主持人暂时失联了，请稍后再试。");
     } finally {
@@ -106,6 +150,33 @@ const App: React.FC = () => {
     () => soups.find((s) => s.id === selectedId) ?? null,
     [soups, selectedId]
   );
+
+  const shareUrl = useMemo(() => {
+    if (!sessionId || typeof window === "undefined") return "";
+    const url = new URL(window.location.href);
+    url.searchParams.set("session", sessionId);
+    return url.toString();
+  }, [sessionId]);
+
+  async function handleCreateSessionForSoup(soupId: string) {
+    try {
+      setError(null);
+      const info = await createSession(soupId);
+      setSessionId(info.sessionId);
+      setSelectedId(info.soup.id);
+      setDetail(info.soup);
+      setChat(info.history);
+      setApiStatus("ok");
+
+      if (typeof window !== "undefined") {
+        const url = new URL(window.location.href);
+        url.searchParams.set("session", info.sessionId);
+        window.history.replaceState(null, "", url.toString());
+      }
+    } catch (e: any) {
+      setError(e?.message ?? "创建房间失败，请稍后重试。");
+    }
+  }
 
   return (
     <div className="shell">
@@ -187,6 +258,43 @@ const App: React.FC = () => {
                   ? currentSoup.opening
                   : "选中题目后，你只会看到这段开局描述。真相只有主持人和出题人知道。"}
               </div>
+              {selectedId && !sessionId && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    fontSize: 11
+                  }}
+                >
+                  <span style={{ color: "#9ca3af" }}>
+                    想和朋友一起玩？先为这道题创建一个房间。
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => handleCreateSessionForSoup(selectedId)}
+                  >
+                    创建房间
+                  </button>
+                </div>
+              )}
+              {sessionId && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    fontSize: 11,
+                    color: "#9ca3af",
+                    wordBreak: "break-all"
+                  }}
+                >
+                  房间已创建，可把这个链接发给朋友一起玩：
+                  <br />
+                  <span>{shareUrl}</span>
+                </div>
+              )}
             </div>
           </div>
         </section>
@@ -248,13 +356,21 @@ const App: React.FC = () => {
                 <textarea
                   className="chat-textarea"
                   placeholder={
-                    selectedId
+                    sessionId
                       ? "例如：他是被别人害死的吗？这和天气有关吗？"
                       : "请先在左侧选择一题海龟汤～"
                   }
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  disabled={!selectedId || asking}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      if (canAsk) {
+                        void handleAsk();
+                      }
+                    }
+                  }}
+                  disabled={!sessionId || asking}
                   rows={2}
                 />
                 <div className="chat-input-hint">Enter 发送 · Shift+Enter 换行</div>
@@ -270,7 +386,7 @@ const App: React.FC = () => {
               <button
                 type="button"
                 className="btn btn-ghost"
-                disabled={!selectedId || asking}
+                disabled={!sessionId || asking}
                 onClick={handleQuickHint}
               >
                 要个提示

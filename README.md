@@ -9,13 +9,16 @@
 
 ### 目录结构
 
-- `functions/`：Cloudflare Pages Functions（真正线上使用的后端）
+- `functions/`：Cloudflare Pages Functions（真正线上使用的后端，支持多人同房间）
   - `_shared/hostPrompt.ts`：主持人系统提示词
   - `_shared/turtleSoups.ts`：海龟汤题库
   - `_shared/qianwenClient.ts`：通义千问 API 调用封装（内含写死的免费 Key）
+  - `_shared/sessions.ts`：房间 / 对局会话结构与存取工具（依赖 KV）
   - `api/turtle-soups.ts`：`GET /api/turtle-soups` 题库列表
   - `api/turtle-soups/[id].ts`：`GET /api/turtle-soups/:id` 单题详情
-  - `api/turtle-soups/[id]/ask.ts`：`POST /api/turtle-soups/:id/ask` 向主持人提问
+  - `api/sessions.ts`：`POST /api/sessions` 创建房间（为指定汤底开一局）
+  - `api/sessions/[id].ts`：`GET /api/sessions/:id` 获取某个房间当前题目与历史对话
+  - `api/sessions/[id]/ask.ts`：`POST /api/sessions/:id/ask` 在指定房间里向主持人提问（多人共享）
 - `frontend/`：前端单页应用（React + Vite）
   - `src/styles/theme.css`：样式文件
 
@@ -29,6 +32,13 @@
   - **Build output directory**：`frontend/dist`
 - Pages 会自动识别根目录下的 `functions/` 作为后端 Functions，提供 `/api/...` 接口
 
+#### 1.1 绑定 KV 用于多人房间会话（可在 Cloudflare 控制台完成）
+
+- 在 Cloudflare 中为本 Pages 项目新增一个 KV 命名空间，例如命名为 `turtle-soup-sessions`
+- 在 Pages 的 **Settings → Functions → KV namespaces** 中新增绑定：
+  - Binding name：`SESSIONS_KV`
+  - Namespace：选择刚刚创建的 `turtle-soup-sessions`
+
 #### 2. 访问
 
 - 构建完成后，会得到一个形如 `https://xxx.pages.dev` 的地址
@@ -38,5 +48,6 @@
 
 - 固定题库 + AI 主持人：后端内置多道海龟汤题目，并利用通义千问作为主持人自动判断玩家提问的「是 / 否 / 无关」并适时给出提示。
 - 主持人提示词、题库、前端样式均拆分到独立文件，方便扩展与维护。
+- 支持通过 **房间链接** 邀请好友加入同一局：创建房间后复制链接发送给好友，双方共享同一个汤底和一份对话历史。
 
 
