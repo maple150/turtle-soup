@@ -194,7 +194,7 @@ const App: React.FC = () => {
         <div className="brand">
           <div className="brand-logo">汤</div>
           <div>
-            <div className="brand-text-main">海龟汤 · 通义千问版</div>
+            <div className="brand-text-main">海龟汤</div>
             <div className="brand-text-sub">AI 主持人陪你一起脑洞推理</div>
           </div>
         </div>
