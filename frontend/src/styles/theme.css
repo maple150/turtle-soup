@@ -75,7 +75,6 @@ body {
 .shell {
   width: 100%;
   max-width: 1120px;
-  max-height: 92vh;
   background: linear-gradient(145deg, rgba(15, 23, 42, 0.96), rgba(5, 9, 22, 0.98));
   border-radius: 26px;
   border: 1px solid rgba(148, 163, 184, 0.3);
@@ -408,7 +407,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 260px;
   overflow: auto;
   padding-right: 3px;
 }
@@ -535,8 +533,6 @@ body {
 
 .chat-log {
   flex: 1;
-  min-height: 180px;
-  max-height: 260px;
   overflow: auto;
   padding: 10px;
   border-radius: 12px;
