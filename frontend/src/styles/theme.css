@@ -1,15 +1,50 @@
 :root {
+  /* Base colors */
   --bg: #050816;
   --bg-elevated: rgba(15, 23, 42, 0.85);
   --accent: #22d3ee;
   --accent-soft: rgba(34, 211, 238, 0.1);
   --accent-strong: #0ea5e9;
+  --accent-dark: #0284c7;
   --text-primary: #f9fafb;
   --text-secondary: #94a3b8;
   --border-subtle: rgba(148, 163, 184, 0.3);
   --danger: #fb7185;
+  --success: #22c55e;
+  --warning: #eab308;
+
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+
+  /* Border radius */
   --card-radius: 18px;
+  --button-radius: 999px;
+  --input-radius: 12px;
+
+  /* Transitions */
   --transition-fast: 0.18s ease-out;
+  --transition-normal: 0.3s ease;
+  --transition-slow: 0.5s ease;
+
+  /* Shadows */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.15);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.35);
+  --shadow-glow: 0 0 20px rgba(34, 211, 238, 0.3);
+
+  /* Breakpoints */
+  --breakpoint-mobile: 768px;
+  --breakpoint-tablet: 992px;
+
+  /* Z-index layers */
+  --z-base: 1;
+  --z-dropdown: 100;
+  --z-modal: 200;
+  --z-toast: 300;
 }
 
 *,
@@ -141,6 +176,159 @@ body {
 @media (max-width: 900px) {
   .shell-body {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Mobile responsive styles */
+@media (max-width: var(--breakpoint-mobile)) {
+  .app-root {
+    padding: 0;
+    background: var(--bg);
+  }
+
+  .shell {
+    max-height: 100vh;
+    border-radius: 0;
+    border: none;
+    box-shadow: none;
+  }
+
+  .shell-header {
+    display: none; /* Hide on mobile, use MobileHeader instead */
+  }
+
+  .shell-body {
+    padding: 0;
+    gap: 0;
+    height: calc(100vh - 48px); /* Account for mobile header height */
+  }
+
+  .panel {
+    border-radius: 0;
+    border: none;
+    padding: 12px;
+    position: absolute;
+    inset: 0;
+    transition: transform var(--transition-normal) ease, opacity var(--transition-normal) ease;
+  }
+
+  .panel.hidden {
+    transform: translateX(100%);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .panel.visible {
+    transform: translateX(0);
+    opacity: 1;
+  }
+
+  .soup-list {
+    max-height: calc(100vh - 200px);
+  }
+
+  .chat-log {
+    max-height: calc(100vh - 300px);
+    min-height: 200px;
+  }
+
+  .chat-input-area {
+    flex-direction: column;
+    gap: 10px;
+    position: sticky;
+    bottom: 0;
+    background: linear-gradient(0deg, rgba(5, 8, 22, 0.98) 0%, rgba(5, 8, 22, 0.8) 100%);
+    padding: 12px;
+    border-radius: 16px 16px 0 0;
+    margin: 0 -12px -12px -12px;
+  }
+
+  .chat-input-box {
+    width: 100%;
+  }
+
+  .chat-textarea {
+    min-height: 48px;
+    font-size: 16px; /* Prevent iOS zoom */
+  }
+
+  .btn {
+    width: 100%;
+    padding: 12px 16px;
+    font-size: 14px;
+    justify-content: center;
+    min-height: 44px;
+  }
+
+  .btn-ghost {
+    width: auto;
+    flex: 1;
+  }
+
+  .footer {
+    display: none; /* Hide on mobile */
+  }
+}
+
+/* Tablet responsive styles */
+@media (min-width: 769px) and (max-width: var(--breakpoint-tablet)) {
+  .app-root {
+    padding: 12px;
+  }
+
+  .shell {
+    max-width: 100%;
+    max-height: 95vh;
+  }
+
+  .shell-body {
+    grid-template-columns: 350px 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .soup-list {
+    max-height: 200px;
+  }
+
+  .chat-log {
+    max-height: 300px;
+  }
+}
+
+/* Small mobile devices */
+@media (max-width: 480px) {
+  .panel {
+    padding: 10px;
+  }
+
+  .panel-title {
+    font-size: 13px;
+  }
+
+  .panel-subtitle {
+    font-size: 10px;
+  }
+
+  .soup-title {
+    font-size: 12px;
+  }
+
+  .soup-difficulty {
+    font-size: 10px;
+  }
+
+  .tag {
+    font-size: 9px;
+    padding: 1px 5px;
+  }
+
+  .opening-card {
+    font-size: 11px;
+    padding: 8px 10px;
+  }
+
+  .chat-textarea {
+    padding: 10px;
   }
 }
 
@@ -574,5 +762,160 @@ body {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/* Additional animations */
+@keyframes messageSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.1);
+  }
+}
+
+@keyframes glowPulse {
+  0%, 100% {
+    box-shadow: 0 0 5px var(--accent);
+  }
+  50% {
+    box-shadow: 0 0 15px var(--accent), 0 0 25px var(--accent);
+  }
+}
+
+@keyframes buttonBounce {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(0.97);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes typingDot {
+  0%, 60%, 100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes shake {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-2px);
+  }
+  75% {
+    transform: translateX(2px);
+  }
+}
+
+/* Utility classes */
+.slide-in {
+  animation: messageSlideIn var(--transition-normal) ease-out backwards;
+}
+
+.slide-up {
+  animation: fadeIn var(--transition-normal) ease-out backwards;
+}
+
+.pulse {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.glow {
+  animation: glowPulse 2s ease-in-out infinite;
+}
+
+/* Smooth scrolling for chat */
+.chat-log {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Better touch targets on mobile */
+@media (max-width: var(--breakpoint-mobile)) {
+  .soup-item {
+    padding: 12px 14px;
+    min-height: 48px;
+  }
+
+  .btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* Loading states */
+.loading-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(15, 23, 42, 0.8) 0%,
+    rgba(56, 189, 248, 0.1) 50%,
+    rgba(15, 23, 42, 0.8) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Typing indicator */
+.typing-indicator {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+}
+
+.typing-indicator span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--text-secondary);
+  animation: typingDot 1.4s ease-in-out infinite;
+}
+
+.typing-indicator span:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.typing-indicator span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-indicator span:nth-child(3) {
+  animation-delay: 0.4s;
 }
 
