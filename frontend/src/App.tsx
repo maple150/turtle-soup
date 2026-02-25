@@ -1,19 +1,20 @@
-import React, { useEffect, useMemo, useState } from "react";
-import type { ChatTurn, TurtleSoupDetail, TurtleSoupSummary } from "./types";
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type {
+  ChatTurn,
+  TurtleSoupSummary,
+  TurtleSoupDetail,
+} from "./types";
 import {
   askInSession,
   createSession,
   fetchSession,
-  fetchSoupDetail,
-  fetchSoups
+  fetchSoups,
 } from "./api/client";
-import { useAutoScroll } from "./hooks/useAutoScroll";
-import { useMobileLayout, ActivePanel } from "./hooks/useMobileLayout";
-import { usePollingSession } from "./hooks/usePollingSession";
-import { ChatBubble } from "./components/ChatBubble";
-import { MessageIndicator } from "./components/MessageIndicator";
-import { ConnectionStatus } from "./components/ConnectionStatus";
-import { MobileHeader } from "./components/MobileHeader";
 import "./styles/theme.css";
 
 type Status = "idle" | "loading" | "error" | "ok";
@@ -35,82 +36,39 @@ const difficultyClass = (d: number) => {
 const App: React.FC = () => {
   const [soups, setSoups] = useState<TurtleSoupSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<TurtleSoupDetail | null>(null);
-  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [currentSoup, setCurrentSoup] = useState<TurtleSoupDetail | null>(
+    null
+  );
 
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [progress, setProgress] = useState<number | null>(null);
-
   const [chat, setChat] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
   const [asking, setAsking] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
 
   const [apiStatus, setApiStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
+
+  // 自动滚动 & 未读消息提示
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const [userNearBottom, setUserNearBottom] = useState(true);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // Mobile layout hook
-  const { isMobile, activePanel, setActivePanel, togglePanel } = useMobileLayout();
+  // 简单轮询同步状态
+  const [connectionState, setConnectionState] = useState<
+    "idle" | "connecting" | "online" | "error"
+  >("idle");
+  const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
+  const POLL_INTERVAL_MS = 3000;
 
-  // Auto-scroll hook
-  const { chatLogRef, scrollPosition, scrollToBottom, manualScroll } = useAutoScroll({
-    threshold: 100,
-    smooth: true,
-    autoScrollOnNewMessage: true
-  });
-
-  // Handle session updates from polling
-  const handleSessionUpdate = (updatedSession: { soup: TurtleSoupDetail; history: ChatTurn[] }) => {
-    const previousLength = chat.length;
-    const newLength = updatedSession.history.length;
-
-    // Update chat history
-    setChat(updatedSession.history);
-    setDetail(updatedSession.soup);
-
-    // Calculate unread messages if user is not at bottom
-    if (previousLength < newLength && !scrollPosition.isNearBottom) {
-      setUnreadCount(newLength - previousLength);
-    }
-
-    setApiStatus("ok");
-  };
-
-  // Handle scroll events
-  const handleScroll = () => {
-    manualScroll();
-    if (scrollPosition.isNearBottom) {
-      setUnreadCount(0);
-    }
-  };
-
-  // Handle message indicator click
-  const handleScrollToBottom = () => {
-    scrollToBottom(true);
-    setUnreadCount(0);
-  };
-
-  // Real-time polling for multiplayer sync
-  const {
-    isConnected,
-    isPolling,
-    lastSyncTime,
-    connectionState,
-    pollInterval,
-    retryCount,
-    forceSync
-  } = usePollingSession({
-    sessionId,
-    onUpdate: handleSessionUpdate,
-    onError: (err) => setError(err.message)
-  });
-
-  // Load soups list
+  // 加载题库
   useEffect(() => {
     (async () => {
       try {
         const list = await fetchSoups();
         setSoups(list);
+        setApiStatus("ok");
       } catch (e: any) {
         setApiStatus("error");
         setError(e?.message ?? "加载题库失败");
@@ -118,7 +76,7 @@ const App: React.FC = () => {
     })();
   }, []);
 
-  // Parse session ID from URL
+  // URL 中带 session 时自动加入房间
   useEffect(() => {
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
@@ -128,62 +86,93 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Load existing session
+  // 加载已有房间
   useEffect(() => {
     if (!sessionId) return;
-    setLoadingDetail(true);
-    setError(null);
+    setConnectionState("connecting");
     (async () => {
       try {
         const info = await fetchSession(sessionId);
         setSelectedId(info.soup.id);
-        setDetail(info.soup);
+        setCurrentSoup(info.soup);
         setChat(info.history);
+        setConnectionState("online");
+        setLastSyncAt(Date.now());
         setApiStatus("ok");
-
-        // Auto-switch to chat panel on mobile when joining a session
-        if (isMobile) {
-          setActivePanel('chat');
-        }
       } catch (e: any) {
         setError(e?.message ?? "房间不存在或已过期，请确认链接是否正确。");
+        setConnectionState("error");
         setApiStatus("error");
-      } finally {
-        setLoadingDetail(false);
       }
     })();
-  }, [sessionId, isMobile, setActivePanel]);
+  }, [sessionId]);
 
-  // Load soup detail when selected (not in session)
+  // 当选择题目但尚未创建房间时，只用于展示开局描述
   useEffect(() => {
     if (!selectedId) {
       if (!sessionId) {
-        setDetail(null);
+        setCurrentSoup(null);
         setChat([]);
       }
       return;
     }
-    if (sessionId) return;
 
-    setLoadingDetail(true);
-    setError(null);
-    (async () => {
-      try {
-        const d = await fetchSoupDetail(selectedId);
-        setDetail(d);
+    const found = soups.find((s) => s.id === selectedId);
+    if (found) {
+      setCurrentSoup(found);
+      if (!sessionId) {
         setChat([
           {
             role: "assistant",
-            content: "欢迎来到海龟汤推理室，我是主持人「汤神小千」。请选择或创建房间后再开始发问。"
-          }
+            content:
+              "欢迎来到海龟汤推理室，我是主持人「汤神小千」。请为这道题创建房间后再开始发问。",
+          },
         ]);
-      } catch (e: any) {
-        setError(e?.message ?? "加载题目失败");
-      } finally {
-        setLoadingDetail(false);
       }
-    })();
-  }, [selectedId, sessionId]);
+    }
+  }, [selectedId, sessionId, soups]);
+
+  // 简单轮询：多人同步
+  useEffect(() => {
+    if (!sessionId) return;
+    let timer: number | null = null;
+    let cancelled = false;
+
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const info = await fetchSession(sessionId);
+        setCurrentSoup(info.soup);
+        setSelectedId(info.soup.id);
+        setChat((prev) => {
+          // 如果长度不同就直接替换
+          if (prev.length !== info.history.length) {
+            // 如果用户不在底部，增加未读数
+            if (!userNearBottom && info.history.length > prev.length) {
+              setUnreadCount((c) => c + (info.history.length - prev.length));
+            }
+            return info.history;
+          }
+          return prev;
+        });
+        setConnectionState("online");
+        setLastSyncAt(Date.now());
+      } catch {
+        setConnectionState("error");
+      } finally {
+        if (!cancelled) {
+          timer = window.setTimeout(tick, POLL_INTERVAL_MS);
+        }
+      }
+    };
+
+    timer = window.setTimeout(tick, POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [sessionId, userNearBottom]);
 
   const canAsk = useMemo(
     () => !!sessionId && input.trim().length > 0 && !asking,
@@ -206,10 +195,7 @@ const App: React.FC = () => {
       const { answer, history } = await askInSession(sessionId, question);
       setChat(history.length ? history : [...nextChat, { role: "assistant", content: answer }]);
 
-      // Auto-scroll to bottom on new message
-      scrollToBottom(true);
-
-      // Parse progress if querying
+      // 解析进度
       if (question === "进度") {
         const match = answer.match(/进度：(\d+)%/);
         if (match) {
@@ -228,10 +214,28 @@ const App: React.FC = () => {
     handleAsk("我有点卡住了，请给我一个不剧透的提示。");
   }
 
-  const currentSoup = useMemo(
-    () => soups.find((s) => s.id === selectedId) ?? null,
-    [soups, selectedId]
-  );
+  // 自动滚动到最新
+  useEffect(() => {
+    if (!chatEndRef.current) return;
+    if (userNearBottom) {
+      chatEndRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
+      setUnreadCount(0);
+    } else {
+      // 用户停留在历史时，新消息只提示
+      setUnreadCount((c) => c + 1);
+    }
+  }, [chat, userNearBottom]);
+
+  // 监听滚动判断是否在底部
+  function handleChatScroll() {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    const distance =
+      el.scrollHeight - (el.scrollTop + el.clientHeight);
+    const nearBottom = distance < 40;
+    setUserNearBottom(nearBottom);
+    if (nearBottom) setUnreadCount(0);
+  }
 
   const shareUrl = useMemo(() => {
     if (!sessionId || typeof window === "undefined") return "";
@@ -240,20 +244,17 @@ const App: React.FC = () => {
     return url.toString();
   }, [sessionId]);
 
-  async function handleCreateSessionForSoup(soupId: string) {
+  async function handleCreateSession() {
+    if (!selectedId) return;
     try {
       setError(null);
-      const info = await createSession(soupId);
+      const info = await createSession(selectedId);
       setSessionId(info.sessionId);
-      setSelectedId(info.soup.id);
-      setDetail(info.soup);
+      setCurrentSoup(info.soup);
       setChat(info.history);
       setApiStatus("ok");
-
-      // Switch to chat panel on mobile after creating session
-      if (isMobile) {
-        setActivePanel('chat');
-      }
+      setConnectionState("online");
+      setLastSyncAt(Date.now());
 
       if (typeof window !== "undefined") {
         const url = new URL(window.location.href);
@@ -265,63 +266,65 @@ const App: React.FC = () => {
     }
   }
 
-  function handleSelectSoup(soupId: string) {
-    setSelectedId(soupId);
-    if (isMobile) {
-      setActivePanel('list');
+  const currentStatusText = useMemo(() => {
+    if (connectionState === "online" && lastSyncAt) {
+      const diffSec = Math.floor((Date.now() - lastSyncAt) / 1000);
+      const ago =
+        diffSec < 10
+          ? "刚刚"
+          : diffSec < 60
+          ? `${diffSec}s 前`
+          : `${Math.floor(diffSec / 60)} 分钟前`;
+      return `已连接 · 上次同步 ${ago}`;
     }
-  }
+    if (connectionState === "connecting") return "连接中...";
+    if (connectionState === "error") return "连接异常";
+    return "未连接房间";
+  }, [connectionState, lastSyncAt]);
 
   return (
-    <div className="app-root">
-      {isMobile && (
-        <MobileHeader
-          title={currentSoup?.title || '海龟汤'}
-          connectionState={connectionState}
-          lastSyncTime={lastSyncTime}
-          pollInterval={pollInterval}
-          retryCount={retryCount}
-          onMenuToggle={togglePanel}
-          showBackButton={activePanel === 'chat'}
-          onBack={() => setActivePanel('list')}
-          activePanel={activePanel}
-        />
-      )}
-
-      <div className="shell">
-        {!isMobile && (
-          <header className="shell-header">
-            <div className="brand">
-              <div className="brand-logo">汤</div>
-              <div>
-                <div className="brand-text-main">海龟汤</div>
-                <div className="brand-text-sub">AI 主持人陪你一起脑洞推理</div>
-              </div>
+    <div className="page">
+      <header className="top-bar">
+        <div className="brand">
+          <div className="brand-logo">汤</div>
+          <div>
+            <div className="brand-text-main">海龟汤 · 通义千问版</div>
+            <div className="brand-text-sub">
+              AI 主持人与多人实时推理房间
             </div>
-            <div className="shell-header-right">
-              {sessionId && isConnected && (
-                <ConnectionStatus
-                  state={connectionState}
-                  lastSyncTime={lastSyncTime}
-                  pollInterval={pollInterval}
-                  retryCount={retryCount}
-                />
-              )}
-              <div className="chip">
-                <span className="chip-dot" />
-                <span>Powered by 通义千问</span>
-              </div>
-            </div>
-          </header>
-        )}
+          </div>
+        </div>
+        <div className="top-bar-right">
+          <div className="chip">
+            <span className="chip-dot" />
+            <span>Powered by 通义千问</span>
+          </div>
+          <div className="chip connection-chip">
+            <span
+              className={
+                "status-dot " +
+                (connectionState === "online"
+                  ? "ok"
+                  : connectionState === "error"
+                  ? "error"
+                  : "")
+              }
+            />
+            <span className="connection-text">{currentStatusText}</span>
+          </div>
+        </div>
+      </header>
 
-        <main className="shell-body">
-          {/* Soup List Panel */}
-          <section className={`panel ${isMobile && activePanel !== 'list' ? 'hidden' : ''}`}>
+      <main className="content">
+        {/* 左侧：题库与房间 */}
+        <section className="pane pane-left">
+          <div className="panel">
             <div className="panel-header">
               <div className="panel-title-group">
-                <div className="panel-title">题库 / 房间列表</div>
-                <div className="panel-subtitle">选一碗你想喝的汤，再开始发问</div>
+                <div className="panel-title">题库 / 房间</div>
+                <div className="panel-subtitle">
+                  选一碗汤，创建房间，与朋友共享同一局
+                </div>
               </div>
               <div className="panel-meta">
                 <span className="pill">共 {soups.length} 题</span>
@@ -334,9 +337,13 @@ const App: React.FC = () => {
                     key={s.id}
                     type="button"
                     className={
-                      "soup-item slide-in" + (s.id === selectedId ? " selected" : "")
+                      "soup-item slide-in" +
+                      (s.id === selectedId ? " selected" : "")
                     }
-                    onClick={() => handleSelectSoup(s.id)}
+                    onClick={() => {
+                      setSelectedId(s.id);
+                      setProgress(null);
+                    }}
                   >
                     <div className="soup-title-row">
                       <div className="soup-title">{s.title}</div>
@@ -362,70 +369,55 @@ const App: React.FC = () => {
                 {soups.length === 0 && (
                   <div className="panel-subtitle">
                     {apiStatus === "error"
-                      ? "题库加载失败，请检查后端是否已部署。"
-                      : "正在加载题库……"}
+                      ? "题库加载失败，请检查后端。"
+                      : "正在加载题库..."}
                   </div>
                 )}
               </div>
+
               <div className="opening-card">
                 <div className="opening-title">
                   {currentSoup
                     ? `当前题目：${currentSoup.title}`
-                    : "请选择左侧的一道海龟汤题目"}
+                    : "请选择一题海龟汤"}
                 </div>
                 <div>
                   {currentSoup
                     ? currentSoup.opening
                     : "选中题目后，你只会看到这段开局描述。真相只有主持人和出题人知道。"}
                 </div>
-                {selectedId && !sessionId && (
-                  <div
-                    style={{
-                      marginTop: 8,
-                      display: "flex",
-                      gap: 8,
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      fontSize: 11
-                    }}
-                  >
-                    <span style={{ color: "#9ca3af" }}>
-                      想和朋友一起玩？先为这道题创建一个房间。
-                    </span>
+                <div className="room-actions">
+                  {selectedId && !sessionId && (
                     <button
                       type="button"
-                      className="btn btn-ghost"
-                      onClick={() => handleCreateSessionForSoup(selectedId)}
+                      className="btn btn-primary"
+                      onClick={handleCreateSession}
                     >
-                      创建房间
+                      创建房间并开始这局
                     </button>
-                  </div>
-                )}
-                {sessionId && (
-                  <div
-                    style={{
-                      marginTop: 8,
-                      fontSize: 11,
-                      color: "#9ca3af",
-                      wordBreak: "break-all"
-                    }}
-                  >
-                    房间已创建，可把这个链接发给朋友一起玩：
-                    <br />
-                    <span>{shareUrl}</span>
-                  </div>
-                )}
+                  )}
+                  {sessionId && (
+                    <div className="room-link">
+                      <div className="room-link-label">
+                        房间已创建，把链接发给朋友一起玩：
+                      </div>
+                      <div className="room-link-value">{shareUrl}</div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-          </section>
+          </div>
+        </section>
 
-          {/* Chat Panel */}
-          <section className={`panel ${isMobile && activePanel !== 'chat' ? 'hidden' : ''}`}>
+        {/* 右侧：聊天 */}
+        <section className="pane pane-right">
+          <div className="panel">
             <div className="panel-header">
               <div className="panel-title-group">
                 <div className="panel-title">对话 / 推理区</div>
                 <div className="panel-subtitle">
-                  用「是 / 否 / 无关 / 无法确定」问答的方式，一步步逼近真相
+                  只能用「是 / 否 / 无关 / 无法确定」来问出真相
                 </div>
               </div>
               {progress !== null && (
@@ -443,44 +435,63 @@ const App: React.FC = () => {
                 </div>
               )}
             </div>
+
             <div className="panel-body chat-container">
               <div
-                ref={chatLogRef}
                 className="chat-log"
-                onScroll={handleScroll}
+                ref={chatContainerRef}
+                onScroll={handleChatScroll}
               >
-                {detail && (
-                  <div className="chat-bubble-wrapper">
-                    <div className="chat-bubble host slide-in">
+                {currentSoup && (
+                  <div className="chat-bubble-wrapper host slide-in">
+                    <div className="chat-bubble">
                       <div className="chat-meta">系统提示</div>
-                      <div style={{ fontSize: 11, color: "#9ca3af" }}>
-                        当前题目难度：{difficultyLabel(detail.difficulty)}。
-                        请避免直接问「真相是什么」，可以从人物、动机、时间线、地点等角度逐步缩小范围。
+                      <div className="chat-content">
+                        当前题目难度：{difficultyLabel(currentSoup.difficulty)}。
+                        建议从人物、动机、时间线等角度慢慢缩小范围，避免直接问“真相是什么”。
                       </div>
                     </div>
                   </div>
                 )}
-                {chat.map((m, idx) => (
-                  <ChatBubble
-                    key={idx}
-                    message={m}
-                    index={idx}
-                    isVisible={true}
-                  />
-                ))}
-                {!selectedId && (
-                  <div className="chat-bubble-wrapper">
-                    <div className="chat-bubble host slide-in">
+
+                {chat.map((m, idx) => {
+                  const isUser = m.role === "user";
+                  return (
+                    <div
+                      key={idx}
+                      className={
+                        "chat-bubble-wrapper slide-in " +
+                        (isUser ? "user" : "host")
+                      }
+                      style={{
+                        animationDelay: `${idx * 40}ms`,
+                      }}
+                    >
+                      <div className="chat-bubble">
+                        <div className="chat-meta">
+                          {isUser ? "你" : "主持人"}
+                        </div>
+                        <div className="chat-content">{m.content}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {!selectedId && chat.length === 0 && (
+                  <div className="chat-bubble-wrapper host slide-in">
+                    <div className="chat-bubble">
                       <div className="chat-meta">主持人</div>
-                      <div>
-                        先在左侧选一道你感兴趣的题目吧～ 选好之后，就可以开始用各种刁钻问题来拷问我了。
+                      <div className="chat-content">
+                        先在左侧选一道你感兴趣的题目吧～
+                        选好并创建房间后，就可以开始用各种刁钻问题来拷问我了。
                       </div>
                     </div>
                   </div>
                 )}
+
                 {asking && (
-                  <div className="chat-bubble-wrapper">
-                    <div className="chat-bubble host slide-in">
+                  <div className="chat-bubble-wrapper host slide-in">
+                    <div className="chat-bubble">
                       <div className="typing-indicator">
                         <span></span>
                         <span></span>
@@ -489,12 +500,29 @@ const App: React.FC = () => {
                     </div>
                   </div>
                 )}
+
+                <div ref={chatEndRef} />
               </div>
 
-              <MessageIndicator
-                count={unreadCount}
-                onClick={handleScrollToBottom}
-              />
+              {unreadCount > 0 && (
+                <button
+                  type="button"
+                  className="message-indicator"
+                  onClick={() => {
+                    setUserNearBottom(true);
+                    setUnreadCount(0);
+                    if (chatEndRef.current) {
+                      chatEndRef.current.scrollIntoView({
+                        behavior: "smooth",
+                        block: "end",
+                      });
+                    }
+                  }}
+                >
+                  <span className="message-count">{unreadCount}</span>
+                  <span className="message-text">条新消息，点击查看</span>
+                </button>
+              )}
 
               <div className="chat-input-area">
                 <div className="chat-input-box">
@@ -502,23 +530,23 @@ const App: React.FC = () => {
                     className="chat-textarea"
                     placeholder={
                       sessionId
-                        ? "例如：他是被别人害死的吗？这和天气有关吗？"
-                        : "请先在左侧选择一题海龟汤～"
+                        ? "例如：他是被别人害死的吗？这和天气有关吗？（输入“进度”可以查看百分比）"
+                        : "请先在左侧选择一题并创建房间～"
                     }
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault();
-                        if (canAsk) {
-                          void handleAsk();
-                        }
+                        if (canAsk) void handleAsk();
                       }
                     }}
                     disabled={!sessionId || asking}
-                    rows={isMobile ? 3 : 2}
+                    rows={2}
                   />
-                  <div className="chat-input-hint">Enter 发送 · Shift+Enter 换行</div>
+                  <div className="chat-input-hint">
+                    Enter 发送 · Shift+Enter 换行
+                  </div>
                 </div>
                 <button
                   type="button"
@@ -537,46 +565,28 @@ const App: React.FC = () => {
                   要个提示
                 </button>
               </div>
+
               {error && (
                 <div
                   style={{
                     fontSize: 11,
                     color: "#fb7185",
-                    marginTop: 2
+                    marginTop: 4,
                   }}
                 >
                   {error}
                 </div>
               )}
             </div>
-          </section>
-        </main>
+          </div>
+        </section>
+      </main>
 
-        {!isMobile && (
-          <footer className="footer">
-            <div className="status-text">
-              <span
-                className={
-                  "status-dot " +
-                  (apiStatus === "error"
-                    ? "error"
-                    : apiStatus === "ok"
-                    ? "ok"
-                    : "")
-                }
-              />
-              <span>
-                {apiStatus === "error"
-                  ? "后端连接异常，请检查 Cloudflare Worker 是否已部署。"
-                  : apiStatus === "ok"
-                  ? "已连接到海龟汤主持人。"
-                  : "正在连接题库..."}
-              </span>
-            </div>
-            <div>你可以把这个项目直接推到 GitHub，然后用 Cloudflare Pages + Workers 部署。</div>
-          </footer>
-        )}
-      </div>
+      <footer className="bottom-bar">
+        <span>
+          前端已为桌面和手机浏览器自适应，你可以在任意设备上上下滑动正常游玩。
+        </span>
+      </footer>
     </div>
   );
 };
