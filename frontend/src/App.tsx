@@ -1,23 +1,20 @@
-import React, {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import "./styles/theme.css";
+import {
+  fetchSoups,
+  createSession,
+  fetchSession,
+  askInSession,
+} from "./api/client";
 import type {
   ChatTurn,
   TurtleSoupSummary,
   TurtleSoupDetail,
 } from "./types";
-import {
-  askInSession,
-  createSession,
-  fetchSession,
-  fetchSoups,
-} from "./api/client";
-import "./styles/theme.css";
 
 type Status = "idle" | "loading" | "error" | "ok";
+
+type ConnectionState = "idle" | "connecting" | "online" | "error";
 
 const difficultyLabel = (d: number) => {
   if (d <= 1) return "新手";
@@ -35,7 +32,7 @@ const difficultyClass = (d: number) => {
 
 const App: React.FC = () => {
   const [soups, setSoups] = useState<TurtleSoupSummary[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedSoupId, setSelectedSoupId] = useState<string | null>(null);
   const [currentSoup, setCurrentSoup] = useState<TurtleSoupDetail | null>(
     null
   );
@@ -46,20 +43,18 @@ const App: React.FC = () => {
   const [asking, setAsking] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
 
-  const [apiStatus, setApiStatus] = useState<Status>("idle");
+  const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
 
-  // 自动滚动 & 未读消息提示
+  const [connectionState, setConnectionState] =
+    useState<ConnectionState>("idle");
+  const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
+
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
-  const [userNearBottom, setUserNearBottom] = useState(true);
+  const [isAtBottom, setIsAtBottom] = useState(true);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // 简单轮询同步状态
-  const [connectionState, setConnectionState] = useState<
-    "idle" | "connecting" | "online" | "error"
-  >("idle");
-  const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const POLL_INTERVAL_MS = 3000;
 
   // 加载题库
@@ -68,15 +63,15 @@ const App: React.FC = () => {
       try {
         const list = await fetchSoups();
         setSoups(list);
-        setApiStatus("ok");
+        setStatus("ok");
       } catch (e: any) {
-        setApiStatus("error");
+        setStatus("error");
         setError(e?.message ?? "加载题库失败");
       }
     })();
   }, []);
 
-  // URL 中带 session 时自动加入房间
+  // 从 URL 中读取 sessionId
   useEffect(() => {
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
@@ -86,70 +81,69 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // 加载已有房间
+  // 如果有 sessionId，则加载房间
   useEffect(() => {
     if (!sessionId) return;
     setConnectionState("connecting");
     (async () => {
       try {
         const info = await fetchSession(sessionId);
-        setSelectedId(info.soup.id);
+        setSelectedSoupId(info.soup.id);
         setCurrentSoup(info.soup);
         setChat(info.history);
         setConnectionState("online");
         setLastSyncAt(Date.now());
-        setApiStatus("ok");
+        setStatus("ok");
       } catch (e: any) {
-        setError(e?.message ?? "房间不存在或已过期，请确认链接是否正确。");
         setConnectionState("error");
-        setApiStatus("error");
+        setStatus("error");
+        setError(e?.message ?? "房间不存在或已过期，请确认链接是否正确。");
       }
     })();
   }, [sessionId]);
 
-  // 当选择题目但尚未创建房间时，只用于展示开局描述
+  // 没有房间时，选择题目只用于展示开局
   useEffect(() => {
-    if (!selectedId) {
+    if (!selectedSoupId) {
       if (!sessionId) {
         setCurrentSoup(null);
         setChat([]);
       }
       return;
     }
+    const found = soups.find((s) => s.id === selectedSoupId);
+    if (!found) return;
 
-    const found = soups.find((s) => s.id === selectedId);
-    if (found) {
-      setCurrentSoup(found);
-      if (!sessionId) {
-        setChat([
-          {
-            role: "assistant",
-            content:
-              "欢迎来到海龟汤推理室，我是主持人「汤神小千」。请为这道题创建房间后再开始发问。",
-          },
-        ]);
-      }
+    setCurrentSoup(found);
+    if (!sessionId) {
+      setChat([
+        {
+          role: "assistant",
+          content:
+            "欢迎来到海龟汤推理室，我是主持人「汤神小千」。请为这道题创建房间后再开始发问。",
+        },
+      ]);
     }
-  }, [selectedId, sessionId, soups]);
+  }, [selectedSoupId, soups, sessionId]);
 
-  // 简单轮询：多人同步
+  // 简单轮询实现多人同步
   useEffect(() => {
     if (!sessionId) return;
-    let timer: number | null = null;
     let cancelled = false;
+    let timer: number | null = null;
 
     const tick = async () => {
       if (cancelled) return;
       try {
         const info = await fetchSession(sessionId);
+        setSelectedSoupId(info.soup.id);
         setCurrentSoup(info.soup);
-        setSelectedId(info.soup.id);
         setChat((prev) => {
-          // 如果长度不同就直接替换
           if (prev.length !== info.history.length) {
-            // 如果用户不在底部，增加未读数
-            if (!userNearBottom && info.history.length > prev.length) {
-              setUnreadCount((c) => c + (info.history.length - prev.length));
+            if (!isAtBottom && info.history.length > prev.length) {
+              setUnreadCount(
+                (c) => c + (info.history.length - prev.length)
+              );
             }
             return info.history;
           }
@@ -172,7 +166,7 @@ const App: React.FC = () => {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [sessionId, userNearBottom]);
+  }, [sessionId, isAtBottom]);
 
   const canAsk = useMemo(
     () => !!sessionId && input.trim().length > 0 && !asking,
@@ -193,9 +187,10 @@ const App: React.FC = () => {
 
     try {
       const { answer, history } = await askInSession(sessionId, question);
-      setChat(history.length ? history : [...nextChat, { role: "assistant", content: answer }]);
+      setChat(
+        history.length ? history : [...nextChat, { role: "assistant", content: answer }]
+      );
 
-      // 解析进度
       if (question === "进度") {
         const match = answer.match(/进度：(\d+)%/);
         if (match) {
@@ -214,26 +209,23 @@ const App: React.FC = () => {
     handleAsk("我有点卡住了，请给我一个不剧透的提示。");
   }
 
-  // 自动滚动到最新
+  // 自动滚动到最新消息
   useEffect(() => {
     if (!chatEndRef.current) return;
-    if (userNearBottom) {
+    if (isAtBottom) {
       chatEndRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
       setUnreadCount(0);
     } else {
-      // 用户停留在历史时，新消息只提示
       setUnreadCount((c) => c + 1);
     }
-  }, [chat, userNearBottom]);
+  }, [chat, isAtBottom]);
 
-  // 监听滚动判断是否在底部
   function handleChatScroll() {
     const el = chatContainerRef.current;
     if (!el) return;
-    const distance =
-      el.scrollHeight - (el.scrollTop + el.clientHeight);
+    const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
     const nearBottom = distance < 40;
-    setUserNearBottom(nearBottom);
+    setIsAtBottom(nearBottom);
     if (nearBottom) setUnreadCount(0);
   }
 
@@ -245,14 +237,14 @@ const App: React.FC = () => {
   }, [sessionId]);
 
   async function handleCreateSession() {
-    if (!selectedId) return;
+    if (!selectedSoupId) return;
     try {
       setError(null);
-      const info = await createSession(selectedId);
+      const info = await createSession(selectedSoupId);
       setSessionId(info.sessionId);
       setCurrentSoup(info.soup);
       setChat(info.history);
-      setApiStatus("ok");
+      setStatus("ok");
       setConnectionState("online");
       setLastSyncAt(Date.now());
 
@@ -266,16 +258,16 @@ const App: React.FC = () => {
     }
   }
 
-  const currentStatusText = useMemo(() => {
+  const connectionText = useMemo(() => {
     if (connectionState === "online" && lastSyncAt) {
       const diffSec = Math.floor((Date.now() - lastSyncAt) / 1000);
       const ago =
         diffSec < 10
-          ? "刚刚"
+          ? "刚刚同步"
           : diffSec < 60
-          ? `${diffSec}s 前`
-          : `${Math.floor(diffSec / 60)} 分钟前`;
-      return `已连接 · 上次同步 ${ago}`;
+          ? `${diffSec}s 前同步`
+          : `${Math.floor(diffSec / 60)} 分钟前同步`;
+      return `已连接 · ${ago}`;
     }
     if (connectionState === "connecting") return "连接中...";
     if (connectionState === "error") return "连接异常";
@@ -290,7 +282,7 @@ const App: React.FC = () => {
           <div>
             <div className="brand-text-main">海龟汤 · 通义千问版</div>
             <div className="brand-text-sub">
-              AI 主持人与多人实时推理房间
+              AI 主持人 + 多人同步推理房间
             </div>
           </div>
         </div>
@@ -310,7 +302,7 @@ const App: React.FC = () => {
                   : "")
               }
             />
-            <span className="connection-text">{currentStatusText}</span>
+            <span className="connection-text">{connectionText}</span>
           </div>
         </div>
       </header>
@@ -338,10 +330,10 @@ const App: React.FC = () => {
                     type="button"
                     className={
                       "soup-item slide-in" +
-                      (s.id === selectedId ? " selected" : "")
+                      (s.id === selectedSoupId ? " selected" : "")
                     }
                     onClick={() => {
-                      setSelectedId(s.id);
+                      setSelectedSoupId(s.id);
                       setProgress(null);
                     }}
                   >
@@ -368,7 +360,7 @@ const App: React.FC = () => {
                 ))}
                 {soups.length === 0 && (
                   <div className="panel-subtitle">
-                    {apiStatus === "error"
+                    {status === "error"
                       ? "题库加载失败，请检查后端。"
                       : "正在加载题库..."}
                   </div>
@@ -387,7 +379,7 @@ const App: React.FC = () => {
                     : "选中题目后，你只会看到这段开局描述。真相只有主持人和出题人知道。"}
                 </div>
                 <div className="room-actions">
-                  {selectedId && !sessionId && (
+                  {selectedSoupId && !sessionId && (
                     <button
                       type="button"
                       className="btn btn-primary"
@@ -463,9 +455,7 @@ const App: React.FC = () => {
                         "chat-bubble-wrapper slide-in " +
                         (isUser ? "user" : "host")
                       }
-                      style={{
-                        animationDelay: `${idx * 40}ms`,
-                      }}
+                      style={{ animationDelay: `${idx * 40}ms` }}
                     >
                       <div className="chat-bubble">
                         <div className="chat-meta">
@@ -477,13 +467,13 @@ const App: React.FC = () => {
                   );
                 })}
 
-                {!selectedId && chat.length === 0 && (
+                {!selectedSoupId && chat.length === 0 && (
                   <div className="chat-bubble-wrapper host slide-in">
                     <div className="chat-bubble">
                       <div className="chat-meta">主持人</div>
                       <div className="chat-content">
-                        先在左侧选一道你感兴趣的题目吧～
-                        选好并创建房间后，就可以开始用各种刁钻问题来拷问我了。
+                        先在左侧选一道你感兴趣的题目吧～ 选好并创建房间后，
+                        就可以开始用各种刁钻问题来拷问我了。
                       </div>
                     </div>
                   </div>
@@ -509,7 +499,7 @@ const App: React.FC = () => {
                   type="button"
                   className="message-indicator"
                   onClick={() => {
-                    setUserNearBottom(true);
+                    setIsAtBottom(true);
                     setUnreadCount(0);
                     if (chatEndRef.current) {
                       chatEndRef.current.scrollIntoView({
@@ -530,7 +520,7 @@ const App: React.FC = () => {
                     className="chat-textarea"
                     placeholder={
                       sessionId
-                        ? "例如：他是被别人害死的吗？这和天气有关吗？（输入“进度”可以查看百分比）"
+                        ? "例如：他是被别人害死的吗？这和天气有关吗？（输入“进度”可查看百分比）"
                         : "请先在左侧选择一题并创建房间～"
                     }
                     value={input}
@@ -567,13 +557,7 @@ const App: React.FC = () => {
               </div>
 
               {error && (
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: "#fb7185",
-                    marginTop: 4,
-                  }}
-                >
+                <div className="error-text">
                   {error}
                 </div>
               )}
@@ -584,7 +568,7 @@ const App: React.FC = () => {
 
       <footer className="bottom-bar">
         <span>
-          前端已为桌面和手机浏览器自适应，你可以在任意设备上上下滑动正常游玩。
+          前端已重新设计，支持桌面与手机浏览器自适应，你可以在任意设备上上下滑动正常游玩。
         </span>
       </footer>
     </div>
@@ -592,3 +576,4 @@ const App: React.FC = () => {
 };
 
 export default App;
+
