@@ -43,7 +43,7 @@ export function usePollingSession(props: UsePollingSessionProps): UsePollingSess
   const [pollInterval, setPollInterval] = useState(config.baseInterval);
   const [retryCount, setRetryCount] = useState(0);
 
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastActivityTimeRef = useRef<Date>(new Date());
   const isRateLimitedRef = useRef(false);
 
@@ -58,11 +58,11 @@ export function usePollingSession(props: UsePollingSessionProps): UsePollingSess
       if (!currentSession) return true;
 
       // Check if chat history has changed
-      if (currentSession.chat.length !== newSession.chat.length) return true;
+      if (currentSession.history.length !== newSession.history.length) return true;
 
       // Check if any message content has changed
-      for (let i = 0; i < currentSession.chat.length; i++) {
-        if (currentSession.chat[i].content !== newSession.chat[i].content) {
+      for (let i = 0; i < currentSession.history.length; i++) {
+        if (currentSession.history[i].content !== newSession.history[i].content) {
           return true;
         }
       }

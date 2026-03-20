@@ -4,9 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "vite",
+    "typecheck": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "echo \"no lint configured\""
+    "lint": "npm run typecheck"
   },
   "dependencies": {
     "react": "^18.3.1",

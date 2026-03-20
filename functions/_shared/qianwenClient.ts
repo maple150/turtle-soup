@@ -1,36 +1,50 @@
 import type { ChatCompletionMessageParam } from "./types";
 
-// 按你的要求：这里直接写死免费的通义千问 Key。
-// 强烈不建议在真实项目里这样做，因为任何看到源码的人都可以滥用这个 Key。
-const QIANWEN_API_KEY = "sk-6533c949f54f4a088680624b03c16b4c";
-
-// 通义千问兼容 OpenAI 的 Chat Completions 接口（DashScope 兼容模式）
-// 文档可能会更新，如果无法调用，可以到通义千问官网查看最新的兼容模式地址。
-const QIANWEN_ENDPOINT =
+const DEFAULT_QIANWEN_ENDPOINT =
   "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
-
-// 你可以根据自己的账号情况更换为其他模型名称，例如：qwen-turbo / qwen-plus 等
-const QIANWEN_MODEL = "qwen-plus";
+const DEFAULT_QIANWEN_MODEL = "qwen-plus";
 
 export interface QianwenChatOptions {
   temperature?: number;
 }
 
+export interface QianwenEnv {
+  QIANWEN_API_KEY?: string;
+  QIANWEN_ENDPOINT?: string;
+  QIANWEN_MODEL?: string;
+}
+
+function getQianwenConfig(env?: QianwenEnv) {
+  const apiKey = env?.QIANWEN_API_KEY;
+  if (!apiKey) {
+    throw new Error("QIANWEN_API_KEY is not configured");
+  }
+
+  return {
+    apiKey,
+    endpoint: env?.QIANWEN_ENDPOINT ?? DEFAULT_QIANWEN_ENDPOINT,
+    model: env?.QIANWEN_MODEL ?? DEFAULT_QIANWEN_MODEL
+  };
+}
+
 export async function callQianwenChat(
   messages: ChatCompletionMessageParam[],
-  options: QianwenChatOptions = {}
+  options: QianwenChatOptions = {},
+  env?: QianwenEnv
 ): Promise<string> {
+  const config = getQianwenConfig(env);
+
   const body = {
-    model: QIANWEN_MODEL,
+    model: config.model,
     messages,
     temperature: options.temperature ?? 0.7
   };
 
-  const resp = await fetch(QIANWEN_ENDPOINT, {
+  const resp = await fetch(config.endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${QIANWEN_API_KEY}`
+      Authorization: `Bearer ${config.apiKey}`
     },
     body: JSON.stringify(body)
   });
@@ -53,4 +67,3 @@ export async function callQianwenChat(
 
   return content;
 }
-

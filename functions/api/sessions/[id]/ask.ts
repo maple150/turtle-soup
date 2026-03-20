@@ -1,15 +1,38 @@
 import { getTurtleSoupById } from "../../../_shared/turtleSoups";
+import { runHostTurn } from "../../../_shared/gameMaster";
 import {
+  addHistoryTurn,
+  addQuestionStat,
+  addSessionEvent,
+  addTheoryStat,
+  buildSessionPayload,
+  bumpPlayerScore,
+  ensurePlayer,
   loadSession,
+  markSolved,
+  normalizePlayerName,
   saveSession,
-  type ChatTurn
+  touchPlayer,
+  type VisibleSoup
 } from "../../../_shared/sessions";
-import { HOST_SYSTEM_PROMPT } from "../../../_shared/hostPrompt";
-import { callQianwenChat } from "../../../_shared/qianwenClient";
-import type { ChatCompletionMessageParam } from "../../../_shared/types";
 
 interface AskBody {
-  question: string;
+  question?: string;
+  playerId?: string;
+  playerName?: string;
+  mode?: "question" | "hint" | "progress" | "theory";
+}
+
+function toVisibleSoup(soupId: string): VisibleSoup | null {
+  const soup = getTurtleSoupById(soupId);
+  if (!soup) return null;
+  return {
+    id: soup.id,
+    title: soup.title,
+    opening: soup.opening,
+    difficulty: soup.difficulty,
+    tags: soup.tags
+  };
 }
 
 export const onRequest = async (context: any): Promise<Response> => {
@@ -46,17 +69,14 @@ export const onRequest = async (context: any): Promise<Response> => {
     });
   }
 
-  let body: AskBody;
+  let body: AskBody | null = null;
   try {
     body = (await request.json()) as AskBody;
   } catch {
-    return new Response(JSON.stringify({ error: "INVALID_JSON" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" }
-    });
+    body = null;
   }
 
-  if (!body.question || typeof body.question !== "string") {
+  if (!body?.question || typeof body.question !== "string") {
     return new Response(JSON.stringify({ error: "INVALID_QUESTION" }), {
       status: 400,
       headers: { "Content-Type": "application/json" }
@@ -71,82 +91,131 @@ export const onRequest = async (context: any): Promise<Response> => {
     });
   }
 
-  const isProgress = question === "进度";
-
-  // 将当前房间的历史对话转换为 LLM 需要的格式
-  const historyMessages: ChatCompletionMessageParam[] = session.history.map(
-    (turn: ChatTurn) => ({
-      role: turn.role,
-      content: turn.content
-    })
+  const { player, joined } = ensurePlayer(
+    session,
+    {
+      id: body.playerId,
+      name: body.playerName ?? normalizePlayerName(body.playerName)
+    },
+    { isHost: session.players.length === 0 }
   );
 
-  const baseMessages: ChatCompletionMessageParam[] = [
-    {
-      role: "system",
-      content: HOST_SYSTEM_PROMPT
-    },
-    {
-      role: "user",
-      content: [
-        "以下是本题的【真相】与【开局描述】（只给你看，玩家看不到）：",
-        "",
-        `【真相】:\n${soup.truth}`,
-        "",
-        `【开局描述】:\n${soup.opening}`,
-        "",
-        "下面是到目前为止的对话历史（如果有）："
-      ].join("\n")
-    },
-    ...historyMessages
-  ];
-
-  const finalUserMessage: ChatCompletionMessageParam = isProgress
-    ? {
-        role: "user",
-        content:
-          "玩家现在发送了“进度”两个字，他们想知道目前距离完整真相的大致接近百分比。" +
-          "请根据以上对话内容评估一个 0-100 之间的整数百分比，并且只输出一行，格式严格为“进度：X%”，不要输出任何其他文字、标点或解释。"
-      }
-    : {
-        role: "user",
-        content: `玩家的新提问或请求是：“${question}”。请严格按照系统提示，只返回一行符合规则的答案。`
-      };
-
-  const messages: ChatCompletionMessageParam[] = [...baseMessages, finalUserMessage];
-
-  try {
-    const answer = await callQianwenChat(messages, { temperature: 0.6 });
-
-    // 更新房间历史：追加这次问答
-    session.history.push(
-      { role: "user", content: question },
-      { role: "assistant", content: answer }
-    );
-
-    await saveSession(env, session);
-
-    return new Response(
-      JSON.stringify({
-        answer,
-        history: session.history
-      }),
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      }
-    );
-  } catch (err: any) {
-    return new Response(
-      JSON.stringify({
-        error: "QIANWEN_ERROR",
-        message: err?.message ?? String(err)
-      }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" }
-      }
-    );
+  if (joined) {
+    addSessionEvent(session, {
+      kind: "player_joined",
+      message: `${player.name} 加入了房间。`,
+      actorId: player.id,
+      actorName: player.name
+    });
   }
-};
 
+  const mode = body.mode ?? "question";
+
+  if (session.phase === "lobby") {
+    session.phase = "playing";
+    addSessionEvent(session, {
+      kind: "game_started",
+      message: "本局正式开始，第一轮推理开始滚动。"
+    });
+  }
+
+  if (mode === "theory") {
+    addTheoryStat(session, player.id);
+  } else if (mode === "question") {
+    addQuestionStat(session, player.id);
+  } else {
+    touchPlayer(session, player.id);
+  }
+
+  addHistoryTurn(session, {
+    role: "user",
+    kind: mode === "theory" ? "theory" : mode === "hint" ? "hint" : mode === "progress" ? "progress" : "question",
+    content: question,
+    playerId: player.id,
+    playerName: player.name
+  });
+
+  addSessionEvent(session, {
+    kind:
+      mode === "theory"
+        ? "theory_shared"
+        : mode === "hint"
+        ? "hint_requested"
+        : mode === "progress"
+        ? "progress_checked"
+        : "question_asked",
+    message:
+      mode === "theory"
+        ? `${player.name} 提交了一条完整推理。`
+        : mode === "hint"
+        ? `${player.name} 请求了一个提示。`
+        : mode === "progress"
+        ? `${player.name} 查看了团队进度。`
+        : `${player.name} 抛出了一个新问题。`,
+    actorId: player.id,
+    actorName: player.name
+  });
+
+  const result = await runHostTurn(
+    session,
+    {
+      id: soup.id,
+      title: soup.title,
+      opening: soup.opening,
+      truth: soup.truth,
+      difficulty: soup.difficulty,
+      tags: soup.tags
+    },
+    player,
+    question,
+    mode,
+    env
+  );
+
+  addHistoryTurn(session, {
+    role: "assistant",
+    kind:
+      result.mode === "hint"
+        ? "hint"
+        : result.mode === "progress"
+        ? "progress"
+        : result.solved
+        ? "celebration"
+        : "host_reply",
+    content: result.reply,
+    verdict: result.verdict,
+    progress: result.progress
+  });
+
+  if (result.solved && session.phase !== "solved") {
+    const summary = result.solutionSummary || soup.truth;
+    markSolved(session, summary);
+    bumpPlayerScore(session, player.id, 12);
+    addSessionEvent(session, {
+      kind: "game_solved",
+      message: result.celebration || `${player.name} 破解了这锅汤。`,
+      actorId: player.id,
+      actorName: player.name
+    });
+    addHistoryTurn(session, {
+      role: "system",
+      kind: "celebration",
+      content: `真相揭晓：${summary}`
+    });
+  }
+
+  await saveSession(env, session);
+
+  const visibleSoup = toVisibleSoup(session.soupId);
+  if (!visibleSoup) {
+    return new Response(JSON.stringify({ error: "SOUP_NOT_FOUND" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  return new Response(JSON.stringify(buildSessionPayload(session, visibleSoup)), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  });
+};

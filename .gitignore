@@ -8,6 +8,8 @@ dist/
 # env
 .env
 .env.*
+.dev.vars
+.dev.vars.*
 
 # logs
 npm-debug.log*

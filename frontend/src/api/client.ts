@@ -1,82 +1,65 @@
 import type {
-  ChatTurn,
+  PlayerIdentity,
+  SessionInfo,
   TurtleSoupDetail,
-  TurtleSoupSummary,
-  SessionInfo
+  TurtleSoupSummary
 } from "../types";
+
+export type AskMode = "question" | "hint" | "progress" | "theory";
 
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL && (import.meta as any).env.VITE_API_BASE_URL !== ""
     ? (import.meta as any).env.VITE_API_BASE_URL
     : "/api";
 
-// Request deduplication cache
 const requestCache = new Map<string, Promise<any>>();
-const etagCache = new Map<string, string>();
+const responseCache = new Map<string, any>();
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const url = API_BASE + path;
+  const method = init?.method ?? "GET";
+  const cacheKey = `${method}:${url}`;
 
-  // Check for in-flight request (deduplication)
-  const cacheKey = `${init?.method || 'GET'}:${url}`;
-  if (init?.method !== 'POST' && requestCache.has(cacheKey)) {
+  if (method === "GET" && requestCache.has(cacheKey)) {
     return requestCache.get(cacheKey) as Promise<T>;
   }
 
-  // Prepare request with ETag support for conditional requests
-  const etag = etagCache.get(cacheKey);
-  const headers: HeadersInit = {
-    "Content-Type": "application/json",
-    ...(init?.headers || {})
-  };
-
-  if (etag && !init?.body) {
-    headers['If-None-Match'] = etag;
-  }
-
-  const requestPromise = (async () => {
-    const resp = await fetch(url, {
+  const promise = (async () => {
+    const response = await fetch(url, {
       ...init,
-      headers
+      headers: new Headers({
+        "Content-Type": "application/json",
+        ...(init?.headers ? Object.fromEntries(new Headers(init.headers).entries()) : {})
+      })
     });
 
-    // Store ETag for future requests
-    const newEtag = resp.headers.get('ETag');
-    if (newEtag) {
-      etagCache.set(cacheKey, newEtag);
-    }
-
-    // Handle 304 Not Modified
-    if (resp.status === 304) {
-      // Return cached data or empty result
-      return {} as T;
-    }
-
-    if (!resp.ok) {
-      let msg = `HTTP ${resp.status}`;
+    if (!response.ok) {
+      let message = `HTTP ${response.status}`;
       try {
-        const data = await resp.json();
-        if (data?.message) msg = data.message;
+        const data = await response.json();
+        if (data?.message) message = data.message;
+        if (data?.error && !data?.message) message = data.error;
       } catch {
         // ignore
       }
-      throw new Error(msg);
+      throw new Error(message);
     }
 
-    return (await resp.json()) as T;
+    const data = (await response.json()) as T;
+    if (method === "GET") {
+      responseCache.set(cacheKey, data);
+    }
+    return data;
   })();
 
-  // Cache non-POST requests
-  if (init?.method !== 'POST') {
-    requestCache.set(cacheKey, requestPromise);
-
-    // Clear cache after request completes
-    requestPromise.finally(() => {
+  if (method === "GET") {
+    requestCache.set(cacheKey, promise);
+    promise.finally(() => {
       requestCache.delete(cacheKey);
     });
   }
 
-  return requestPromise;
+  return promise;
 }
 
 export async function fetchSoups(): Promise<TurtleSoupSummary[]> {
@@ -87,10 +70,13 @@ export async function fetchSoupDetail(id: string): Promise<TurtleSoupDetail> {
   return request<TurtleSoupDetail>(`/turtle-soups/${id}`);
 }
 
-export async function createSession(soupId: string): Promise<SessionInfo> {
+export async function createSession(
+  soupId: string,
+  player: PlayerIdentity
+): Promise<SessionInfo> {
   return request<SessionInfo>("/sessions", {
     method: "POST",
-    body: JSON.stringify({ soupId })
+    body: JSON.stringify({ soupId, player })
   });
 }
 
@@ -98,21 +84,63 @@ export async function fetchSession(sessionId: string): Promise<SessionInfo> {
   return request<SessionInfo>(`/sessions/${sessionId}`);
 }
 
+export async function joinSession(
+  sessionId: string,
+  player: PlayerIdentity
+): Promise<SessionInfo> {
+  return request<SessionInfo>(`/sessions/${sessionId}/join`, {
+    method: "POST",
+    body: JSON.stringify(player)
+  });
+}
+
+export async function updatePresence(
+  sessionId: string,
+  player: PlayerIdentity
+): Promise<SessionInfo> {
+  return request<SessionInfo>(`/sessions/${sessionId}/presence`, {
+    method: "POST",
+    body: JSON.stringify({
+      playerId: player.id,
+      playerName: player.name
+    })
+  });
+}
+
+export async function updateReadyState(
+  sessionId: string,
+  playerId: string,
+  ready: boolean
+): Promise<SessionInfo> {
+  return request<SessionInfo>(`/sessions/${sessionId}/ready`, {
+    method: "POST",
+    body: JSON.stringify({ playerId, ready })
+  });
+}
+
 export async function askInSession(
   sessionId: string,
-  question: string
-): Promise<{ answer: string; history: ChatTurn[] }> {
-  return request<{ answer: string; history: ChatTurn[] }>(
-    `/sessions/${sessionId}/ask`,
-    {
-      method: "POST",
-      body: JSON.stringify({ question })
-    }
-  );
+  payload: {
+    question: string;
+    player: PlayerIdentity;
+    mode?: AskMode;
+  }
+): Promise<SessionInfo> {
+  return request<SessionInfo>(`/sessions/${sessionId}/ask`, {
+    method: "POST",
+    body: JSON.stringify({
+      question: payload.question,
+      playerId: payload.player.id,
+      playerName: payload.player.name,
+      mode: payload.mode ?? "question"
+    })
+  });
 }
 
-// Optimized method for polling - only returns essential data
 export async function fetchSessionLatest(sessionId: string): Promise<SessionInfo> {
-  return request<SessionInfo>(`/sessions/${sessionId}`);
+  const cacheKey = `GET:${API_BASE}/sessions/${sessionId}`;
+  if (responseCache.has(cacheKey)) {
+    return responseCache.get(cacheKey) as SessionInfo;
+  }
+  return fetchSession(sessionId);
 }
-

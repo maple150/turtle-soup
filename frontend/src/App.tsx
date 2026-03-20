@@ -215,8 +215,6 @@ const App: React.FC = () => {
     if (isAtBottom) {
       chatEndRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
       setUnreadCount(0);
-    } else {
-      setUnreadCount((c) => c + 1);
     }
   }, [chat, isAtBottom]);
 

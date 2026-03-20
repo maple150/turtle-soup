@@ -65,6 +65,10 @@ export interface SessionData {
   events: SessionEvent[];
 }
 
+export interface SessionEnv {
+  SESSIONS_KV?: KVNamespace;
+}
+
 export interface PlayerIdentityInput {
   id?: string;
   name?: string;
@@ -295,8 +299,11 @@ export function buildSessionPayload(session: SessionData, soup: VisibleSoup) {
   };
 }
 
-export async function loadSession(env: any, id: string): Promise<SessionData | null> {
-  if (!env || !env.SESSIONS_KV) {
+export async function loadSession(
+  env: SessionEnv | undefined,
+  id: string
+): Promise<SessionData | null> {
+  if (!env?.SESSIONS_KV) {
     return memorySessions.has(id) ? cloneSession(memorySessions.get(id)!) : null;
   }
 
@@ -305,10 +312,13 @@ export async function loadSession(env: any, id: string): Promise<SessionData | n
   return stored as SessionData;
 }
 
-export async function saveSession(env: any, session: SessionData): Promise<void> {
+export async function saveSession(
+  env: SessionEnv | undefined,
+  session: SessionData
+): Promise<void> {
   session.updatedAt = Date.now();
 
-  if (!env || !env.SESSIONS_KV) {
+  if (!env?.SESSIONS_KV) {
     memorySessions.set(session.id, cloneSession(session));
     return;
   }

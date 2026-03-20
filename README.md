@@ -1,53 +1,134 @@
-## 海龟汤游戏（通义千问版）
+# 海龟汤游戏
 
-一个基于 **通义千问 API** 的海龟汤（水平思考推理）网页游戏，采用 Cloudflare Pages 的 **Full‑stack 模式**（前端 + Functions 一体化）：
+一个基于通义千问的多人海龟汤推理游戏。
 
-- 前端：React + Vite
-- 后端：Cloudflare Pages Functions（`functions/` 目录）——对接通义千问兼容 OpenAI 的对话接口
+项目现在分成两条后端路径：
 
-> 你要求把免费 API Key **直接写死到代码里**：我会照做，但这会导致任何人都能滥用你的 Key（哪怕是“免费额度”也可能被耗尽/封禁）。强烈建议后续改为 Cloudflare Workers 的 Secret（或环境变量）来存放。
+- `functions/`：Cloudflare Pages Functions，面向线上部署
+- `backend/`：Wrangler + Hono，本地开发时给前端提供 `/api` 接口
 
-### 目录结构
+## 技术栈
 
-- `functions/`：Cloudflare Pages Functions（真正线上使用的后端，支持多人同房间）
-  - `_shared/hostPrompt.ts`：主持人系统提示词
-  - `_shared/turtleSoups.ts`：海龟汤题库
-  - `_shared/qianwenClient.ts`：通义千问 API 调用封装（内含写死的免费 Key）
-  - `_shared/sessions.ts`：房间 / 对局会话结构与存取工具（依赖 KV）
-  - `api/turtle-soups.ts`：`GET /api/turtle-soups` 题库列表
-  - `api/turtle-soups/[id].ts`：`GET /api/turtle-soups/:id` 单题详情
-  - `api/sessions.ts`：`POST /api/sessions` 创建房间（为指定汤底开一局）
-  - `api/sessions/[id].ts`：`GET /api/sessions/:id` 获取某个房间当前题目与历史对话
-  - `api/sessions/[id]/ask.ts`：`POST /api/sessions/:id/ask` 在指定房间里向主持人提问（多人共享）
-- `frontend/`：前端单页应用（React + Vite）
-  - `src/styles/theme.css`：样式文件
+### 前端
 
-### Cloudflare 部署（Full‑stack Pages，一键线上构建）
+- 语言：TypeScript
+- 框架：React 18
+- 构建工具：Vite 5
+- 主要目录：`frontend/src`
 
-#### 1. 在 Cloudflare Pages 里创建项目
+### 后端
 
-- 选择 **Connect to Git**，绑定 GitHub 仓库（例如 `maple150/turtle-soup`）
-- 构建配置：
-  - **Build command**：`cd frontend && npm install && npm run build`
-  - **Build output directory**：`frontend/dist`
-- Pages 会自动识别根目录下的 `functions/` 作为后端 Functions，提供 `/api/...` 接口
+- 语言：TypeScript
+- 框架：Hono
+- 运行时：
+  - 线上：Cloudflare Pages Functions
+  - 本地：Cloudflare Worker（通过 `wrangler dev` 启动 `backend/`）
+- AI 接口：通义千问兼容 OpenAI Chat Completions
+- 会话存储：
+  - 线上优先使用 Cloudflare KV
+  - 本地未配置 KV 时自动回退到内存存储
 
-#### 1.1 绑定 KV 用于多人房间会话（可在 Cloudflare 控制台完成）
+## 架构图
 
-- 在 Cloudflare 中为本 Pages 项目新增一个 KV 命名空间，例如命名为 `turtle-soup-sessions`
-- 在 Pages 的 **Settings → Functions → KV namespaces** 中新增绑定：
-  - Binding name：`SESSIONS_KV`
-  - Namespace：选择刚刚创建的 `turtle-soup-sessions`
+```mermaid
+flowchart LR
+    U[玩家浏览器] --> F[React + Vite 前端]
+    F -->|本地开发 /api| B[backend Hono Worker]
+    F -->|线上部署 /api| P[Cloudflare Pages Functions]
+    B --> Q[通义千问 API]
+    P --> Q
+    P --> K[(Cloudflare KV)]
+    B --> M[(内存会话 / 可选 KV)]
+```
 
-#### 2. 访问
+## 仓库结构
 
-- 构建完成后，会得到一个形如 `https://xxx.pages.dev` 的地址
-- 直接打开该地址即可使用海龟汤游戏，前端会通过同域的 `/api` 与 Functions 后端通信，无需额外配置 `VITE_API_BASE_URL`
+```text
+.
+├─ frontend/                 React 前端
+│  ├─ src/App.tsx            主页面
+│  ├─ src/api/client.ts      前端 API 客户端
+│  └─ src/styles/theme.css   样式
+├─ backend/                  本地开发用 Worker 后端
+│  ├─ src/index.ts           API 入口
+│  ├─ src/services/          会话和通义千问封装
+│  └─ wrangler.toml
+├─ functions/                线上 Cloudflare Pages Functions
+│  ├─ api/                   路由
+│  └─ _shared/               题库、提示词、会话工具、AI 客户端
+└─ package.json              Workspace 脚本
+```
 
-### 功能简介
+## API 概览
 
-- 固定题库 + AI 主持人：后端内置多道海龟汤题目，并利用通义千问作为主持人自动判断玩家提问的「是 / 否 / 无关」并适时给出提示。
-- 主持人提示词、题库、前端样式均拆分到独立文件，方便扩展与维护。
-- 支持通过 **房间链接** 邀请好友加入同一局：创建房间后复制链接发送给好友，双方共享同一个汤底和一份对话历史。
+### 题库
 
+- `GET /api/turtle-soups`
+- `GET /api/turtle-soups/:id`
 
+### 房间
+
+- `POST /api/sessions`
+- `GET /api/sessions/:id`
+- `POST /api/sessions/:id/ask`
+
+## 本地开发
+
+### 1. 安装依赖
+
+```bash
+npm install
+```
+
+### 2. 配置通义千问 Key
+
+把 [backend/.dev.vars.example](backend/.dev.vars.example) 复制为 `backend/.dev.vars`，填入你的配置：
+
+```bash
+QIANWEN_API_KEY=你的密钥
+QIANWEN_MODEL=qwen-plus
+QIANWEN_ENDPOINT=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+```
+
+### 3. 启动
+
+```bash
+npm run dev
+```
+
+默认行为：
+
+- 前端运行在 Vite 开发服务器
+- 前端把 `/api` 代理到本地 `wrangler dev`
+- 房间数据在未配置 KV 时会保存在内存里
+
+## 线上部署
+
+线上主路径仍然是根目录的 `functions/`。
+
+需要在 Cloudflare 里配置：
+
+- `QIANWEN_API_KEY`
+- 可选：`QIANWEN_MODEL`
+- 可选：`QIANWEN_ENDPOINT`
+- 可选 KV 绑定：`SESSIONS_KV`
+
+如果没有绑定 `SESSIONS_KV`，当前代码也可以运行，但房间会话只会存在于单个运行实例的内存生命周期内，不适合正式多人场景。
+
+## 常用脚本
+
+```bash
+npm run dev
+npm run typecheck
+npm run build
+npm run check
+```
+
+## 这次优化做了什么
+
+- 移除了硬编码 API Key，改为从运行时环境读取
+- 修复了本地开发时缺少 `sessions` 接口的问题
+- 为本地开发补上了内存会话存储回退
+- 修复了根脚本在 Windows 下并行运行不稳定的问题
+- 补上了前后端类型检查脚本
+- 修复了前端 304 响应缓存缺失和未读消息重复计数问题
