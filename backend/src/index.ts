@@ -170,7 +170,7 @@ async function handleJoinSession(
     return json({ error: "NOT_FOUND" }, 404);
   }
 
-  const body = (await parseJson<PresenceBody>(request)) ?? {};
+  const body = (await parseJson<PlayerBody>(request)) ?? {};
   const { player, joined } = ensurePlayer(session, body);
 
   if (joined) {
@@ -216,10 +216,7 @@ async function handlePresence(
 
   const touched = touchPlayer(session, body.playerId);
   if (!touched && body.playerName) {
-    ensurePlayer(session, {
-      id: body.playerId,
-      name: body.playerName
-    });
+    ensurePlayer(session, { id: body.playerId, name: body.playerName });
   }
 
   await saveSession(env, session);
